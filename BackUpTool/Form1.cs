@@ -8,6 +8,10 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Data.Odbc;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
+using System.Threading;
+using System.Xml.Linq;
+using System.Net.Security;
 
 
 namespace BackUpTool
@@ -27,6 +31,73 @@ namespace BackUpTool
         
         }
 
+        private void runBackUp(String dbname)
+        {
+           
+                //create the backup command
+                String backupCommand = $"BACKUP DATABASE {dbname} TO DISK='{dbLocation}'";
+                try
+                {
+                    string odbcName = odbcNameTextBox.Text;
+                    string password = passwordTextBox.Text;
+                    string user = userName.Text;
+                    string connectionString = $"DSN={odbcName};UID={user};PWD={password};";
+                    OdbcConnection connection = new OdbcConnection(connectionString);
+                    connection.Open();
+
+                    int sessionId;
+                    //get session ID
+                    using (OdbcCommand getSpid = new OdbcCommand("SELECT @@SPID", connection))
+                    {
+                        sessionId = Convert.ToInt32(getSpid.ExecuteScalar());
+                    }
+
+                    Task.Run(() => monitorProgress(connectionString, sessionId));
+
+                    OdbcCommand command = new OdbcCommand(backupCommand, connection);
+                    command.ExecuteNonQuery();
+                    MessageBox.Show("Backup Successfull", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Error backing up database: {ex.Message}", "Backup Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            
+
+        }
+
+        private void monitorProgress(String connectionString, int sessionID)
+        {
+            String query = $"SELECT percent_complete FROM sys.dm_exec_requests WHERE session_id = {sessionID} AND COMMAND = 'BACKUP DATABASE'";
+            using (OdbcConnection connection = new OdbcConnection(connectionString))
+            {
+                connection.Open();
+                //Get the progress of the backup operation
+                OdbcCommand command = new OdbcCommand(query, connection);
+                OdbcDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    int percentComplete = reader.GetInt32(0);
+                    // Update progress bar 
+                    UpdateProgress(percentComplete);
+                }
+                reader.Close();
+                Thread.Sleep(1000); // Sleep for a second before checking again
+            }
+        }
+
+        private void UpdateProgress(int percent)
+        {
+            if (progressBar.InvokeRequired)
+            {
+                progressBar.Invoke(new Action(() => progressBar.Value = percent));
+            }
+            else
+            {
+                progressBar.Value = percent;
+            }
+        }
+
         private void backUp_Click(object sender, EventArgs e)
         {
             //check the selected item in teh combobox
@@ -43,6 +114,8 @@ namespace BackUpTool
                 return;
             }
 
+            backUp.Enabled = false;
+
             //Open the file save dialog to select the DB backup location
             SaveFileDialog saveFileDialog = new SaveFileDialog();
             saveFileDialog.Filter = "SQL Server Backup Files (*.bak)|*.bak";
@@ -53,27 +126,13 @@ namespace BackUpTool
             saveFileDialog.RestoreDirectory = true;
             saveFileDialog.FileName = dbname + ".bak";
             if (saveFileDialog.ShowDialog() == DialogResult.OK)
-            {
-                dbLocation = saveFileDialog.FileName;
-                //create the backup command
-                String backupCommand = $"BACKUP DATABASE {dbname} TO DISK='{dbLocation}'";
-                try
-                {
-                    string odbcName = odbcNameTextBox.Text;
-                    string password = passwordTextBox.Text;
-                    string user = userName.Text;
-                    string connectionString = $"DSN={odbcName};UID={user};PWD={password};";
-                    OdbcConnection connection = new OdbcConnection(connectionString);
-                    connection.Open();
-                    OdbcCommand command = new OdbcCommand(backupCommand, connection);
-                    command.ExecuteNonQuery();
-                    MessageBox.Show("Backup Successfull", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Error backing up database: {ex.Message}", "Backup Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
+            dbLocation = saveFileDialog.FileName;
+
+            //Start the backUp thread
+            Task.Run(() => runBackUp(dbname));
+            backUp.Enabled = true;
+
+
 
 
         }
@@ -127,6 +186,11 @@ namespace BackUpTool
                 MessageBox.Show($"Error connecting to database: {ex.Message}", "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
 
+
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
 
         }
     }
