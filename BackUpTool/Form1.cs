@@ -20,6 +20,7 @@ namespace BackUpTool
     {
         OdbcConnection connection;
         String dbLocation;
+        Decimal dbSize;
         public Form1()
         {
             InitializeComponent();
@@ -52,7 +53,8 @@ namespace BackUpTool
                         sessionId = Convert.ToInt32(getSpid.ExecuteScalar());
                     }
 
-                    Task.Run(() => monitorProgress(connectionString, sessionId));
+               
+                Task.Run(() => monitorProgress(connectionString, sessionId));
 
                     OdbcCommand command = new OdbcCommand(backupCommand, connection);
                     command.ExecuteNonQuery();
@@ -66,35 +68,62 @@ namespace BackUpTool
 
         }
 
-        private void monitorProgress(String connectionString, int sessionID)
+        private void monitorProgress(string connectionString, int sessionID)
         {
-            String query = $"SELECT percent_complete FROM sys.dm_exec_requests WHERE session_id = {sessionID} AND COMMAND = 'BACKUP DATABASE'";
-            using (OdbcConnection connection = new OdbcConnection(connectionString))
+            Task.Run(() =>
             {
-                connection.Open();
-                //Get the progress of the backup operation
-                OdbcCommand command = new OdbcCommand(query, connection);
-                OdbcDataReader reader = command.ExecuteReader();
-                while (reader.Read())
+                using (var connection = new OdbcConnection(connectionString))
                 {
-                    int percentComplete = reader.GetInt32(0);
-                    // Update progress bar 
-                    UpdateProgress(percentComplete);
+                    connection.Open();
+                    bool backupInProgress = true;
+
+                    while (backupInProgress)
+                    {
+                        try
+                        {
+                            string query = $"SELECT percent_complete FROM sys.dm_exec_requests WHERE session_id = {sessionID} AND command = 'BACKUP DATABASE'";
+                            using (var command = new OdbcCommand(query, connection))
+                            using (var reader = command.ExecuteReader())
+                            {
+                                if (reader.Read())
+                                {
+                                    int percentComplete = Convert.ToInt32(reader["percent_complete"]);
+                                    UpdateProgress(percentComplete);
+                                    //Console.WriteLine($"Backup Progress: {percentComplete}%");
+                                }
+                                else
+                                {
+                                    // Backup is no longer in progress
+                                    backupInProgress = false;
+                                    UpdateProgress(100); // Set progress bar to 100%
+                                }
+                            }
+                            Thread.Sleep(1000); // Wait 1 sec before polling again
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Monitor error: {ex.Message}");
+                            backupInProgress = false;
+                        }
+                    }
                 }
-                reader.Close();
-                Thread.Sleep(1000); // Sleep for a second before checking again
-            }
+            });
         }
+
+
+
 
         private void UpdateProgress(int percent)
         {
             if (progressBar.InvokeRequired)
             {
                 progressBar.Invoke(new Action(() => progressBar.Value = percent));
+                //Console.WriteLine($"PROGRESS UPDATE IN UPDATE METHOD {percent}");
             }
             else
             {
                 progressBar.Value = percent;
+                //Console.WriteLine($"PROGRESS UPDATE IN UPDATE METHOD {percent}");
             }
         }
 
@@ -111,6 +140,13 @@ namespace BackUpTool
             if (connection==null)
             {
                 MessageBox.Show("The connection to the server has expired, kindly re connect","Connection Invalid",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                return;
+            }
+
+            //check if the database is not empty
+            if (string.IsNullOrEmpty(dbname))
+            {
+                MessageBox.Show("Please select a database before proceeding", "No Database Selected", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -139,6 +175,16 @@ namespace BackUpTool
 
         private void close_Click(object sender, EventArgs e)
         {
+            //Close teh application, if task is running terminate 
+            DialogResult res = MessageBox.Show("Are you sure you want to exit the application?", "Exit", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if(res==DialogResult.Yes)
+            {
+                if (connection != null)
+                {
+                    connection.Close();
+                }
+                Application.Exit();
+            }
 
         }
 
@@ -192,6 +238,11 @@ namespace BackUpTool
         private void Form1_Load(object sender, EventArgs e)
         {
 
+        }
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            
         }
     }
 }
